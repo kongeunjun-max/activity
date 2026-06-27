@@ -638,16 +638,13 @@ async function updateRealtimeQuote(symbol) {
 async function pollAllActiveStocks() {
     if (!state.currentStock) return;
     
-    // 1. Update the current selected stock price (Every 10 seconds -> 6 API calls/min max)
+    // 1. Update the current selected stock price (Every 2 minutes -> 120000ms)
     await updateRealtimeQuote(state.currentStock);
     
-    // 2. Update all held stocks in the background once every 60 seconds to save Twelve Data API credits
-    if (!state.lastHoldingsPollTime || (Date.now() - state.lastHoldingsPollTime >= 60000)) {
-        state.lastHoldingsPollTime = Date.now();
-        const heldSymbols = Object.keys(state.holdings).filter(sym => state.holdings[sym].quantity > 0 && sym !== state.currentStock);
-        for (const sym of heldSymbols) {
-            await updateRealtimeQuote(sym);
-        }
+    // 2. Update all held stocks in the background once every 2 minutes (120000ms) to save Twelve Data API credits
+    const heldSymbols = Object.keys(state.holdings).filter(sym => state.holdings[sym].quantity > 0 && sym !== state.currentStock);
+    for (const sym of heldSymbols) {
+        await updateRealtimeQuote(sym);
     }
 }
 
@@ -656,7 +653,7 @@ function startRealtimePolling() {
     pollAllActiveStocks();
     pollingTimer = setInterval(() => {
         pollAllActiveStocks();
-    }, 10000);
+    }, 120000); // 2 minutes (120,000ms)
 }
 
 // ==========================================

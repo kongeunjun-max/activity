@@ -237,13 +237,13 @@ app.get('/api/stock/history', async (req, res) => {
     }
 });
 
-// 3. Get Realtime Quote (Cached for 10 seconds to respect Rate Limit, returning 100% raw unaltered stock data)
+// 3. Get Realtime Quote (Cached for 2 minutes to respect Rate Limit, returning 100% raw unaltered stock data)
 app.get('/api/stock/realtime', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
     
-    // Check 10 seconds cache
+    // Check 2 minutes cache (120,000ms)
     const cached = quoteCache[symbol];
-    if (cached && (Date.now() - cached.timestamp < 10000)) {
+    if (cached && (Date.now() - cached.timestamp < 120000)) {
         return res.json(cached.data);
     }
 
