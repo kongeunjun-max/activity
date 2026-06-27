@@ -128,49 +128,6 @@ function getFallbackHistory(symbol) {
     return data;
 }
 
-// 10 Seconds Auto Batch Sync Poller
-// Queries all 20 stocks in 1 single API call every 10 seconds.
-// Absolutely no AI price manipulation or fake simulation seeds are allowed.
-async function syncAllQuotesFromTwelveData() {
-    if (!API_KEY) return;
-    
-    try {
-        const symbolsStr = SUPPORTED_STOCKS.map(s => s.symbol).join(',');
-        const endpoint = `quote?symbol=${symbolsStr}`;
-        const rawData = await fetchFromTwelveData(endpoint);
-        
-        // Twelve Data returns object keyed by symbols for batch queries
-        SUPPORTED_STOCKS.forEach(stock => {
-            const sym = stock.symbol;
-            const quote = rawData[sym];
-            if (quote && quote.close) {
-                const digits = 2;
-                const cVal = parseFloat(parseFloat(quote.close).toFixed(digits));
-                const pcVal = parseFloat(parseFloat(quote.previous_close).toFixed(digits));
-                const diff = cVal - pcVal;
-                const diffPercent = (diff / pcVal) * 100;
-                
-                quoteCache[sym] = {
-                    c: cVal,
-                    d: parseFloat(diff.toFixed(2)),
-                    dp: parseFloat(diffPercent.toFixed(2)),
-                    h: parseFloat(parseFloat(quote.high).toFixed(2)),
-                    l: parseFloat(parseFloat(quote.low).toFixed(2)),
-                    o: parseFloat(parseFloat(quote.open).toFixed(2)),
-                    pc: pcVal
-                };
-            }
-        });
-        console.log(`[Batch Sync] Successfully updated 20 stocks at ${new Date().toLocaleTimeString()}`);
-    } catch (err) {
-        console.error('[Batch Sync Failed]:', err.message);
-    }
-}
-
-// Start batch syncing immediately and repeat every 10 seconds (6 times per minute)
-setTimeout(syncAllQuotesFromTwelveData, 1000);
-setInterval(syncAllQuotesFromTwelveData, 10000);
-
 // Serve static assets
 app.use(express.static(__dirname));
 
@@ -280,30 +237,61 @@ app.get('/api/stock/history', async (req, res) => {
     }
 });
 
-// 3. Get Realtime Quote (Served instantly from 10-seconds raw batch sync cache)
+// 3. Get Realtime Quote (Cached for 10 seconds to respect Rate Limit, returning 100% raw unaltered stock data)
 app.get('/api/stock/realtime', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
-    const cached = quoteCache[symbol];
-    if (cached) {
-        // Return 100% raw, unaltered stock data directly from the batch sync
-        return res.json(cached);
-    }
     
-    // Safety Net: If the 10-second batch sync is still loading or currently blocked by Twelve Data 429 rate limit,
-    // we return the static reference price with 0.00% daily change.
-    // This strictly avoids making separate individual API calls that instantly compound the 429 lock,
-    // and keeps the UI healthy with 0% mock/simulation fluctuations.
-    const base = FALLBACK_SEEDS[symbol] || 100.0;
-    const staticQuote = {
-        c: base,
-        d: 0.00,
-        dp: 0.00,
-        h: base,
-        l: base,
-        o: base,
-        pc: base
-    };
-    res.json(staticQuote);
+    // Check 10 seconds cache
+    const cached = quoteCache[symbol];
+    if (cached && (Date.now() - cached.timestamp < 10000)) {
+        return res.json(cached.data);
+    }
+
+    try {
+        const endpoint = `quote?symbol=${symbol}`;
+        const rawData = await fetchFromTwelveData(endpoint);
+        
+        if (!rawData || !rawData.close) {
+            throw new Error('No quote data found from Twelve Data');
+        }
+        
+        const cVal = parseFloat(parseFloat(rawData.close).toFixed(2));
+        const pcVal = parseFloat(parseFloat(rawData.previous_close).toFixed(2));
+        const diff = cVal - pcVal;
+        const diffPercent = (diff / pcVal) * 100;
+        
+        const quoteData = {
+            c: cVal,
+            d: parseFloat(diff.toFixed(2)),
+            dp: parseFloat(diffPercent.toFixed(2)),
+            h: parseFloat(parseFloat(rawData.high).toFixed(2)),
+            l: parseFloat(parseFloat(rawData.low).toFixed(2)),
+            o: parseFloat(parseFloat(rawData.open).toFixed(2)),
+            pc: pcVal
+        };
+        
+        // Update cache
+        quoteCache[symbol] = {
+            data: quoteData,
+            timestamp: Date.now()
+        };
+        
+        res.json(quoteData);
+    } catch (err) {
+        console.error(`Error fetching realtime quote for ${symbol}:`, err.message);
+        // Serve static reference price with 0.00% daily change on rate limit block
+        const base = FALLBACK_SEEDS[symbol] || 100.0;
+        const staticQuote = {
+            c: base,
+            d: 0.00,
+            dp: 0.00,
+            h: base,
+            l: base,
+            o: base,
+            pc: base
+        };
+        res.json(staticQuote);
+    }
 });
 
 app.listen(PORT, () => {
