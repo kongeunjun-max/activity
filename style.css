@@ -262,6 +262,11 @@ body {
     transition: all 0.2s;
 }
 
+.stock-dropdown option {
+    background-color: #ffffff;
+    color: #000000;
+}
+
 .stock-dropdown:focus {
     border-color: var(--accent-blue);
     box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
