@@ -34,30 +34,6 @@ const SUPPORTED_STOCKS = [
     { symbol: 'COST', name: 'Costco' }
 ];
 
-// High-fidelity fallback seeds for emergency rate limit bypass
-const FALLBACK_SEEDS = {
-    'MSFT': 390.0,
-    'AAPL': 210.0,
-    'NVDA': 120.0,
-    'GOOGL': 175.0,
-    'AMZN': 185.0,
-    'META': 500.0,
-    'TSM': 150.0,
-    'LLY': 830.0,
-    'AVGO': 1500.0,
-    'TSLA': 180.0,
-    'BRK.B': 410.0,
-    'NVO': 130.0,
-    'JPM': 190.0,
-    'V': 270.0,
-    'UNH': 490.0,
-    'WMT': 65.0,
-    'XOM': 115.0,
-    'MA': 450.0,
-    'ASML': 950.0,
-    'COST': 720.0
-};
-
 // Memory caches
 const quoteCache = {};
 const historyCache = {};
@@ -99,53 +75,9 @@ function fetchFromTwelveData(endpoint) {
     });
 }
 
-// Emergency Fallback Generation (Pure simulation if Twelve Data fails)
-function getFallbackPrice(symbol) {
-    const base = FALLBACK_SEEDS[symbol] || 100.0;
-    const change = (Math.random() - 0.5) * 0.001;
-    const cachedPrice = base * (1 + change);
-    return {
-        c: parseFloat(cachedPrice.toFixed(2)),
-        d: parseFloat((cachedPrice - base * 0.995).toFixed(2)),
-        dp: 0.50,
-        h: parseFloat((cachedPrice * 1.01).toFixed(2)),
-        l: parseFloat((cachedPrice * 0.99).toFixed(2)),
-        o: parseFloat((base * 0.995).toFixed(2)),
-        pc: parseFloat((base * 0.995).toFixed(2))
-    };
-}
-
-function getFallbackHistory(symbol) {
-    const basePrice = FALLBACK_SEEDS[symbol] || 100.0;
-    const data = [];
-    const now = new Date();
-    let price = basePrice * 0.9;
-
-    for (let i = 90; i >= 0; i--) {
-        const date = new Date(now.getTime() - (i * 24 * 60 * 60 * 1000));
-        if (date.getDay() === 0 || date.getDay() === 6) continue;
-        
-        const change = (Math.random() - 0.48) * 0.03;
-        const openVal = price;
-        const closeVal = price * (1 + change);
-        const highVal = Math.max(openVal, closeVal) * (1 + Math.random() * 0.01);
-        const lowVal = Math.min(openVal, closeVal) * (1 - Math.random() * 0.01);
-        
-        data.push({
-            time: date.toISOString().split('T')[0],
-            open: parseFloat(openVal.toFixed(2)),
-            high: parseFloat(highVal.toFixed(2)),
-            low: parseFloat(lowVal.toFixed(2)),
-            close: parseFloat(closeVal.toFixed(2))
-        });
-        price = closeVal;
-    }
-    return data;
-}
-
 // 10 Seconds Auto Batch Sync Poller
-// This is the core engine to query all 20 stocks in 1 single API call every 10 seconds.
-// This limits Twelve Data API usage to EXACTLY 6 calls per minute globally.
+// Queries all 20 stocks in 1 single API call every 10 seconds.
+// Absolutely no AI price manipulation or fake simulation seeds are allowed.
 async function syncAllQuotesFromTwelveData() {
     if (!API_KEY) return;
     
@@ -213,7 +145,7 @@ app.get('/api/stocks', (req, res) => {
     res.json(SUPPORTED_STOCKS);
 });
 
-// 2. Get Historical Candlestick Data (Cached for 5 minutes)
+// 2. Get Historical Candlestick Data (Cached for 5 minutes, 100% unaltered real data only)
 app.get('/api/stock/history', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
     const timeframe = req.query.timeframe || '3M';
@@ -275,18 +207,8 @@ app.get('/api/stock/history', async (req, res) => {
         res.json(chartData);
     } catch (err) {
         console.error(`Error fetching history for ${symbol} with timeframe ${timeframe}:`, err.message);
-        // Under extreme rate limits, fallback gracefully to keep UI rendering
-        const fallbackData = getFallbackHistory(symbol);
-        const mappedFallback = fallbackData.map(val => {
-            return {
-                time: Math.floor(new Date(val.time + 'T00:00:00Z').getTime() / 1000),
-                open: val.open,
-                high: val.high,
-                low: val.low,
-                close: val.close
-            };
-        });
-        res.json(mappedFallback);
+        // Strictly return HTTP 500 error instead of faking data
+        res.status(500).json({ error: 'Twelve Data API Rate Limit Exceeded or Network Error' });
     }
 });
 
@@ -299,9 +221,33 @@ app.get('/api/stock/realtime', async (req, res) => {
         return res.json(cached);
     }
     
-    // If cache not warmed up, return safe fallback seed
-    const fallback = getFallbackPrice(symbol);
-    res.json(fallback);
+    // If cache not warmed up, attempt immediate fetch or throw 500
+    try {
+        const endpoint = `quote?symbol=${symbol}`;
+        const rawData = await fetchFromTwelveData(endpoint);
+        if (!rawData || !rawData.close) {
+            throw new Error('No quote data found from Twelve Data');
+        }
+        const cVal = parseFloat(parseFloat(rawData.close).toFixed(2));
+        const pcVal = parseFloat(parseFloat(rawData.previous_close).toFixed(2));
+        const diff = cVal - pcVal;
+        const diffPercent = (diff / pcVal) * 100;
+        
+        const quoteData = {
+            c: cVal,
+            d: parseFloat(diff.toFixed(2)),
+            dp: parseFloat(diffPercent.toFixed(2)),
+            h: parseFloat(parseFloat(rawData.high).toFixed(2)),
+            l: parseFloat(parseFloat(rawData.low).toFixed(2)),
+            o: parseFloat(parseFloat(rawData.open).toFixed(2)),
+            pc: pcVal
+        };
+        quoteCache[symbol] = quoteData;
+        res.json(quoteData);
+    } catch (err) {
+        console.error(`Fallback fetch failed for ${symbol}:`, err.message);
+        res.status(500).json({ error: 'Twelve Data API Rate Limit Exceeded or Network Error' });
+    }
 });
 
 app.listen(PORT, () => {
