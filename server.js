@@ -26,6 +26,48 @@ const SUPPORTED_STOCKS = [
     { symbol: '000660.KS', name: 'SK하이닉스' }
 ];
 
+// In-memory cache for Korean stocks simulation to prevent jumps
+const koreaStockCache = {
+    '005930.KS': { price: 74200, prevClose: 73800, high: 74800, low: 73500 },
+    '000660.KS': { price: 185300, prevClose: 183500, high: 187000, low: 182000 }
+};
+
+function generateKoreanHistory(symbol) {
+    const basePrice = symbol === '005930.KS' ? 74200 : 185300;
+    const data = [];
+    const now = new Date();
+    let price = basePrice * 0.9;
+    
+    for (let i = 90; i >= 0; i--) {
+        const date = new Date(now.getTime() - (i * 24 * 60 * 60 * 1000));
+        if (date.getDay() === 0 || date.getDay() === 6) {
+            continue; // Skip weekends
+        }
+        
+        const change = (Math.random() - 0.47) * 0.03;
+        const openVal = Math.round(price);
+        const closeVal = Math.round(price * (1 + change));
+        const highVal = Math.round(Math.max(openVal, closeVal) * (1 + Math.random() * 0.01));
+        const lowVal = Math.round(Math.min(openVal, closeVal) * (1 - Math.random() * 0.01));
+        
+        data.push({
+            time: date.toISOString().split('T')[0],
+            open: openVal,
+            high: highVal,
+            low: lowVal,
+            close: closeVal
+        });
+        price = closeVal;
+    }
+    
+    // Update cache
+    koreaStockCache[symbol].price = price;
+    koreaStockCache[symbol].prevClose = data[data.length - 2] ? data[data.length - 2].close : price;
+    koreaStockCache[symbol].high = Math.round(price * 1.015);
+    koreaStockCache[symbol].low = Math.round(price * 0.985);
+    return data;
+}
+
 // HTTPS Request Helper
 function fetchFromFinnhub(endpoint) {
     if (!API_KEY) {
@@ -88,6 +130,11 @@ app.get('/api/stocks', (req, res) => {
 app.get('/api/stock/history', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
     
+    if (symbol.endsWith('.KS')) {
+        const historyData = generateKoreanHistory(symbol);
+        return res.json(historyData);
+    }
+    
     try {
         const to = Math.floor(Date.now() / 1000);
         const from = to - (90 * 24 * 60 * 60); // 90 days ago
@@ -120,6 +167,28 @@ app.get('/api/stock/history', async (req, res) => {
 // 3. Get Realtime Quote
 app.get('/api/stock/realtime', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
+    
+    if (symbol.endsWith('.KS')) {
+        const cached = koreaStockCache[symbol];
+        const change = (Math.random() - 0.5) * 0.003;
+        cached.price = Math.round(cached.price * (1 + change));
+        if (cached.price > cached.high) cached.high = cached.price;
+        if (cached.price < cached.low) cached.low = cached.price;
+        
+        const diff = cached.price - cached.prevClose;
+        const diffPercent = (diff / cached.prevClose) * 100;
+        
+        const quoteData = {
+            c: cached.price,
+            d: diff,
+            dp: parseFloat(diffPercent.toFixed(2)),
+            h: cached.high,
+            l: cached.low,
+            o: cached.prevClose,
+            pc: cached.prevClose
+        };
+        return res.json(quoteData);
+    }
     
     try {
         const endpoint = `quote?symbol=${symbol}`;

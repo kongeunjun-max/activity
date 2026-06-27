@@ -11,7 +11,7 @@ const state = {
 
 // TradingView & Polling references
 let chart = null;
-let candleSeries = null;
+let areaSeries = null;
 let pollingTimer = null;
 let auth = null;
 let db = null;
@@ -79,6 +79,7 @@ function subscribeUserFirestore(uid) {
             state.balance = data.balance !== undefined ? data.balance : 100000000;
             state.holdings = data.holdings || {};
             state.pendingOrders = data.pendingOrders || [];
+            state.history = data.history || [];
             state.currentUser.username = data.username || '트레이더';
             
             syncPendingOrdersToHistory();
@@ -92,6 +93,7 @@ function subscribeUserFirestore(uid) {
                 balance: 100000000,
                 holdings: {},
                 pendingOrders: [],
+                history: [],
                 totalAsset: 100000000,
                 profitRate: 0,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -229,6 +231,7 @@ function setupAuthEventListeners() {
                 balance: 100000000,
                 holdings: {},
                 pendingOrders: [],
+                history: [],
                 totalAsset: 100000000,
                 profitRate: 0,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -262,7 +265,6 @@ function enterAppSession() {
     if (logoutBtn) logoutBtn.classList.remove('hidden');
     
     if (!chart) {
-        initTradingViewChart();
         loadChartHistory(state.currentStock).then(() => {
             startRealtimePolling();
         });
@@ -311,7 +313,7 @@ function exitAppSession() {
         const container = document.getElementById('stock-chart');
         if (container) container.innerHTML = '';
         chart = null;
-        candleSeries = null;
+        areaSeries = null;
     }
 }
 
@@ -376,19 +378,19 @@ function initTradingViewChart() {
             fontFamily: 'Outfit, Noto Sans KR, sans-serif',
         },
         grid: {
-            vertLines: { color: 'rgba(255, 255, 255, 0.03)' },
-            horzLines: { color: 'rgba(255, 255, 255, 0.03)' },
+            vertLines: { color: 'rgba(255, 255, 255, 0.02)' },
+            horzLines: { color: 'rgba(255, 255, 255, 0.02)' },
         },
         crosshair: {
             mode: LightweightCharts.CrosshairMode.Normal,
             vertLine: {
-                color: 'rgba(0, 242, 254, 0.4)',
+                color: 'rgba(0, 242, 254, 0.3)',
                 width: 1,
                 style: 3,
                 labelBackgroundColor: '#1f2937',
             },
             horzLine: {
-                color: 'rgba(0, 242, 254, 0.4)',
+                color: 'rgba(0, 242, 254, 0.3)',
                 width: 1,
                 style: 3,
                 labelBackgroundColor: '#1f2937',
@@ -398,13 +400,20 @@ function initTradingViewChart() {
         timeScale: { borderColor: 'rgba(255, 255, 255, 0.08)', timeVisible: true },
     });
 
-    candleSeries = chart.addCandlestickSeries({
-        upColor: '#ff4a6b',
-        downColor: '#00a8ff',
-        borderUpColor: '#ff4a6b',
-        borderDownColor: '#00a8ff',
-        wickUpColor: '#ff4a6b',
-        wickDownColor: '#00a8ff',
+    const isKRW = state.currentStock.endsWith('.KS');
+    
+    // 봉 차트 대신 그라데이션 광택이 가미된 예쁜 영역 곡선형 차트로 구현
+    areaSeries = chart.addAreaSeries({
+        topColor: isKRW ? 'rgba(0, 255, 135, 0.35)' : 'rgba(0, 242, 254, 0.35)',
+        bottomColor: 'rgba(0, 0, 0, 0)',
+        lineColor: isKRW ? 'rgba(0, 255, 135, 1)' : 'rgba(0, 242, 254, 1)',
+        lineWidth: 3,
+        crosshairMarkerVisible: true,
+        priceFormat: {
+            type: 'price',
+            precision: isKRW ? 0 : 2,
+            minMove: isKRW ? 1 : 0.01
+        }
     });
 
     const resizeObserver = new ResizeObserver(entries => {
@@ -448,6 +457,9 @@ async function fetchStockList() {
 }
 
 async function loadChartHistory(symbol) {
+    // 종목에 맞는 원화/달러화 포맷과 색상 곡선 반영을 위해 진입 시 차트를 새로 빌드
+    initTradingViewChart();
+    
     if (!chart) return;
     
     const loadingOverlay = document.getElementById('chart-loading');
@@ -459,7 +471,11 @@ async function loadChartHistory(symbol) {
         
         const historyData = await response.json();
         if (historyData && historyData.length > 0) {
-            candleSeries.setData(historyData);
+            const mappedData = historyData.map(d => ({
+                time: d.time,
+                value: d.close
+            }));
+            areaSeries.setData(mappedData);
             chart.timeScale().fitContent();
             
             // Set initial state price
@@ -493,13 +509,10 @@ async function updateRealtimeQuote(symbol) {
         stock.volume = data.v || 500000;
         
         const todayStr = new Date().toISOString().split('T')[0];
-        if (candleSeries) {
-            candleSeries.update({
+        if (areaSeries) {
+            areaSeries.update({
                 time: todayStr,
-                open: data.o,
-                high: data.h,
-                low: data.l,
-                close: data.c
+                value: data.c
             });
         }
 
@@ -648,6 +661,7 @@ async function syncUserAssets() {
             balance: state.balance,
             holdings: state.holdings,
             pendingOrders: state.pendingOrders,
+            history: state.history,
             totalAsset: totalAssets,
             profitRate: profitRate
         });
@@ -985,8 +999,9 @@ async function handleOrderSubmit() {
         state.balance = newBalance;
         state.holdings = newHoldings;
         
-        await syncUserAssets();
+        // 대기 리스트 동기화
         syncPendingOrdersToHistory();
+        await syncUserAssets();
         updateUI();
         
         alert(`${symbol} ${qty}주 ${state.orderType === 'buy' ? '매수' : '매도'} 지정가 대기 주문이 등록되었습니다.`);
@@ -1029,8 +1044,7 @@ async function handleOrderSubmit() {
         state.balance = newBalance;
         state.holdings = newHoldings;
         
-        await syncUserAssets();
-        
+        // 거래 기록 배열(history)에 먼저 추가 (체결 즉시 반영)
         state.history.unshift({
             id: 'mkt_' + Date.now(),
             time: timeString,
@@ -1040,6 +1054,9 @@ async function handleOrderSubmit() {
             qty: qty,
             status: '체결'
         });
+        
+        // DB에 기록 내역까지 한 번에 일괄 동기화
+        await syncUserAssets();
         
         updateHistoryTable();
         updateUI();
@@ -1095,6 +1112,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         // 2. Fetch stocks option list first
         await fetchStockList();
+        
+        // 2-1. 첫 번째 기본 종목(MSFT)에 대해 즉각 실시간 시세를 1회 선행 페치하여 0$ 노출 방지
+        if (state.currentStock) {
+            updateRealtimeQuote(state.currentStock);
+        }
     } catch (err) {
         console.error('Stock list load failed:', err);
     }
@@ -1104,7 +1126,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         await initAuthentication();
     } catch (err) {
         console.error('Firebase Authentication init failed:', err);
-        // 에러를 로그인 화면의 에러 엘리먼트에 친절히 시각화하여 띄워줌
         const loginErr = document.getElementById('login-error');
         const regErr = document.getElementById('register-error');
         const msg = `서버/Firebase 연동 실패: ${err.message}`;

@@ -4,6 +4,8 @@ import urllib.request
 import urllib.parse
 import json
 import os
+import random
+from datetime import datetime, timedelta
 
 PORT = 8080
 
@@ -42,6 +44,46 @@ SUPPORTED_STOCKS = [
     { 'symbol': '005930.KS', 'name': '삼성전자' },
     { 'symbol': '000660.KS', 'name': 'SK하이닉스' }
 ]
+
+# Client-side cache for Korean stocks realtime simulation to avoid sudden price jumps
+korea_stock_cache = {
+    '005930.KS': { 'price': 74200, 'prevClose': 73800, 'high': 74800, 'low': 73500 },
+    '000660.KS': { 'price': 185300, 'prevClose': 183500, 'high': 187000, 'low': 182000 }
+}
+
+def generate_korean_history(symbol):
+    base_price = 74200 if symbol == '005930.KS' else 185300
+    data = []
+    now = datetime.now()
+    price = base_price * 0.9  # start slightly lower 90 days ago
+    
+    for i in range(90, -1, -1):
+        date = now - timedelta(days=i)
+        if date.weekday() >= 5: # Exclude weekends
+            continue
+        
+        # Simple random walk
+        change = (random.random() - 0.47) * 0.03 # slightly positive bias
+        open_val = int(price)
+        close_val = int(price * (1 + change))
+        high_val = int(max(open_val, close_val) * (1 + random.random() * 0.01))
+        low_val = int(min(open_val, close_val) * (1 - random.random() * 0.01))
+        
+        data.append({
+            'time': date.strftime('%Y-%m-%d'),
+            'open': open_val,
+            'high': high_val,
+            'low': low_val,
+            'close': close_val
+        })
+        price = close_val
+        
+    # Update cache with latest simulated day's values
+    korea_stock_cache[symbol]['price'] = price
+    korea_stock_cache[symbol]['prevClose'] = data[-2]['close'] if len(data) > 1 else price
+    korea_stock_cache[symbol]['high'] = int(price * 1.015)
+    korea_stock_cache[symbol]['low'] = int(price * 0.985)
+    return data
 
 def fetch_from_finnhub(endpoint):
     if not STOCK_API_KEY:
@@ -104,11 +146,20 @@ class QuantumTradeHandler(http.server.SimpleHTTPRequestHandler):
         if path == '/api/stock/history':
             symbol = query_params.get('symbol', ['AAPL'])[0]
             
+            # Intercept Korean Stocks (.KS) as Finnhub Free tier blocks/fails them
+            if symbol.endswith('.KS'):
+                history_data = generate_korean_history(symbol)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(history_data).encode('utf-8'))
+                return
+            
             try:
                 import time
                 now = int(time.time())
                 from_ts = now - (90 * 24 * 60 * 60) # 90 days
-                endpoint = f"stock/candle?symbol=${symbol}&resolution=D&from={from_ts}&to={now}"
+                endpoint = f"stock/candle?symbol={symbol}&resolution=D&from={from_ts}&to={now}"
                 raw_data = fetch_from_finnhub(endpoint)
                 
                 if raw_data.get('s') != 'ok' or not raw_data.get('t'):
@@ -140,6 +191,33 @@ class QuantumTradeHandler(http.server.SimpleHTTPRequestHandler):
         # 4. API: Stock Realtime Quote
         if path == '/api/stock/realtime':
             symbol = query_params.get('symbol', ['AAPL'])[0]
+            
+            # Intercept Korean Stocks (.KS) as Finnhub Free tier blocks them
+            if symbol.endswith('.KS'):
+                cached = korea_stock_cache[symbol]
+                # Slight random walk update for real-time tick changes
+                change = (random.random() - 0.5) * 0.003
+                cached['price'] = int(cached['price'] * (1 + change))
+                if cached['price'] > cached['high']: cached['high'] = cached['price']
+                if cached['price'] < cached['low']: cached['low'] = cached['price']
+                
+                diff = cached['price'] - cached['prevClose']
+                diff_percent = (diff / cached['prevClose']) * 100
+                
+                quote_data = {
+                    'c': cached['price'],
+                    'd': diff,
+                    'dp': round(diff_percent, 2),
+                    'h': cached['high'],
+                    'l': cached['low'],
+                    'o': cached['prevClose'],
+                    'pc': cached['prevClose']
+                }
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(quote_data).encode('utf-8'))
+                return
             
             try:
                 endpoint = f"quote?symbol={symbol}"
