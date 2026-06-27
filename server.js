@@ -28,7 +28,7 @@ const SUPPORTED_STOCKS = [
 
 // High-fidelity fallback seeds
 const FALLBACK_SEEDS = {
-    'MSFT': 415.0,
+    'MSFT': 390.0,
     'AAPL': 210.0,
     'NVDA': 120.0,
     'GOOGL': 175.0,
@@ -55,13 +55,13 @@ function getFallbackPrice(symbol) {
             low: base * 0.985
         };
     }
-    
+
     const cached = stockRealtimeCache[symbol];
     const change = (Math.random() - 0.5) * 0.003;
     cached.price = cached.price * (1 + change);
     if (cached.price > cached.high) cached.high = cached.price;
     if (cached.price < cached.low) cached.low = cached.price;
-    
+
     const digits = symbol.endsWith('.KS') ? 0 : 2;
     cached.price = parseFloat(cached.price.toFixed(digits));
     cached.high = parseFloat(cached.high.toFixed(digits));
@@ -74,7 +74,7 @@ function getFallbackHistory(symbol) {
     const data = [];
     const now = new Date();
     let price = basePrice * 0.9;
-    
+
     for (let i = 90; i >= 0; i--) {
         const date = new Date(now.getTime() - (i * 24 * 60 * 60 * 1000));
         if (date.getDay() === 0 || date.getDay() === 6) continue;
@@ -107,7 +107,7 @@ function fetchFromFinnhub(endpoint) {
     return new Promise((resolve, reject) => {
         https.get(url, (res) => {
             let data = '';
-            
+
             if (res.statusCode === 429) {
                 return reject(new Error('Finnhub API Rate Limit Exceeded'));
             }
@@ -159,12 +159,12 @@ app.get('/api/stocks', (req, res) => {
 // 2. Get Historical Candlestick Data
 app.get('/api/stock/history', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
-    
+
     if (symbol.endsWith('.KS')) {
         const historyData = getFallbackHistory(symbol);
         return res.json(historyData);
     }
-    
+
     try {
         const to = Math.floor(Date.now() / 1000);
         const from = to - (90 * 24 * 60 * 60); // 90 days ago
@@ -190,7 +190,6 @@ app.get('/api/stock/history', async (req, res) => {
         
         res.json(chartData);
     } catch (err) {
-        console.warn(`[Warning] Failed to fetch history for ${symbol} via API, returning high-fidelity simulated chart:`, err.message);
         const fallbackData = getFallbackHistory(symbol);
         res.json(fallbackData);
     }
@@ -199,7 +198,7 @@ app.get('/api/stock/history', async (req, res) => {
 // 3. Get Realtime Quote
 app.get('/api/stock/realtime', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
-    
+
     if (symbol.endsWith('.KS')) {
         const cached = getFallbackPrice(symbol);
         const diff = cached.price - cached.prevClose;
@@ -216,7 +215,7 @@ app.get('/api/stock/realtime', async (req, res) => {
         };
         return res.json(quoteData);
     }
-    
+
     try {
         const endpoint = `quote?symbol=${symbol}`;
         const rawData = await fetchFromFinnhub(endpoint);
