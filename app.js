@@ -1123,26 +1123,27 @@ function updateHistoryTable() {
 // ==========================================
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // 1. 이벤트 리스너들은 Firebase 초기화 상태와 무관하게 무조건 즉각 바인딩하여 폼 먹통 현상을 원천 방지
+    // 1. 이벤트 리스너 즉각 바인딩
     setupAuthEventListeners();
     
     try {
-        // 2. Fetch stocks option list first
+        // 2. 주식 목록 불러오기
         await fetchStockList();
         
-        // 2-1. 첫 번째 기본 종목(MSFT)에 대해 즉각 실시간 시세를 1회 선행 페치하여 0$ 노출 방지
+        // 🚀 [핵심 수정 부분] 로그인을 안 한 상태여도 차트와 실시간 주가를 무조건 띄우도록 강제 실행!
         if (state.currentStock) {
-            updateRealtimeQuote(state.currentStock);
+            await loadChartHistory(state.currentStock); // 차트 즉시 그리기
+            startRealtimePolling(); // 실시간 가격 4초마다 갱신 시작
         }
     } catch (err) {
-        console.error('Stock list load failed:', err);
+        console.error('Initial data load failed:', err);
     }
     
     try {
-        // 3. Init Authentication module (Firebase Online setup)
+        // 3. Firebase 초기화
         await initAuthentication();
     } catch (err) {
-        console.error('Firebase Authentication init failed:', err);
+        console.error('Firebase init failed:', err);
         const loginErr = document.getElementById('login-error');
         const regErr = document.getElementById('register-error');
         const msg = `서버/Firebase 연동 실패: ${err.message}`;
@@ -1150,7 +1151,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (regErr) regErr.innerText = msg;
     }
     
-    // 4. Register UI control element listeners
+    // 4. UI 컨트롤 리스너 등록
     const stockSelector = document.getElementById('stock-selector');
     if (stockSelector) {
         stockSelector.addEventListener('change', async (e) => {
