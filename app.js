@@ -310,10 +310,15 @@ function exitAppSession() {
         pollingTimer = null;
     }
     if (chart) {
-        const container = document.getElementById('stock-chart');
-        if (container) container.innerHTML = '';
+        try {
+            chart.remove(); // 메모리 릭 방지
+        } catch (e) {
+            console.error(e);
+        }
         chart = null;
         areaSeries = null;
+        const container = document.getElementById('stock-chart');
+        if (container) container.innerHTML = '';
     }
 }
 
@@ -368,6 +373,18 @@ function syncPendingOrdersToHistory() {
 function initTradingViewChart() {
     const chartContainer = document.getElementById('stock-chart');
     if (!chartContainer) return;
+    
+    // 이전 차트 인스턴스가 존재할 경우 확실히 해제(remove)하지 않으면 캔버스 중첩/락 크래시가 유발됨
+    if (chart) {
+        try {
+            chart.remove();
+        } catch (e) {
+            console.error("Error disposing old chart:", e);
+        }
+        chart = null;
+        areaSeries = null;
+    }
+    
     chartContainer.innerHTML = '';
     
     chart = LightweightCharts.createChart(chartContainer, {
