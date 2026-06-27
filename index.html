@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantumTrade - 가상 모의 주식 투자</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons for premium look -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- TradingView Lightweight Charts for premium candlestick charting -->
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    
+    <!-- Firebase SDK Compat Versions (Allows file:/// protocol execution without ES modules block) -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="main-header">
+            <div class="logo-area">
+                <i class="logo-icon" data-lucide="trending-up"></i>
+                <h1>QuantumTrade</h1>
+                <span class="badge status-badge">
+                    <span class="status-dot online" id="status-dot"></span>
+                    <span id="connection-status">서버 연결됨</span>
+                </span>
+            </div>
+            
+            <div class="user-summary">
+                <div class="summary-card">
+                    <span class="card-label">예수금</span>
+                    <span class="card-value" id="user-balance">₩100,000,000</span>
+                </div>
+                <div class="summary-card">
+                    <span class="card-label">총 평가자산</span>
+                    <span class="card-value" id="user-total-asset">₩100,000,000</span>
+                </div>
+                <div class="summary-card" id="profit-card">
+                    <span class="card-label">총 평가손익</span>
+                    <span class="card-value" id="user-total-profit">₩0 (0.00%)</span>
+                </div>
+            </div>
+            
+            <div class="header-actions">
+                <div class="user-profile" id="user-profile-btn" style="cursor: pointer;">
+                    <i data-lucide="user" class="avatar-icon"></i>
+                    <span id="username">로그인 필요</span>
+                </div>
+                <button class="btn-logout hidden" id="logout-btn">
+                    <i data-lucide="log-out" style="width: 14px; height: 14px;"></i>
+                    <span>로그아웃</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Dashboard -->
+        <main class="dashboard-grid">
+            <!-- Left: Chart & Info -->
+            <section class="grid-col-left">
+                <!-- Stock Selector & Info -->
+                <div class="glass-panel stock-header">
+                    <div class="stock-title-info">
+                        <select id="stock-selector" class="stock-dropdown">
+                            <option value="">종목 로딩 중...</option>
+                        </select>
+                        <div class="stock-price-wrap">
+                            <h2 id="current-stock-price">₩0</h2>
+                            <span class="price-change positive" id="current-stock-change">₩0 (0.00%)</span>
+                        </div>
+                    </div>
+                    <div class="stock-details">
+                        <div class="detail-item"><span class="detail-label">고가</span><span class="detail-value" id="stock-high">₩0</span></div>
+                        <div class="detail-item"><span class="detail-label">저가</span><span class="detail-value" id="stock-low">₩0</span></div>
+                        <div class="detail-item"><span class="detail-label">거래량</span><span class="detail-value" id="stock-volume">0</span></div>
+                    </div>
+                </div>
+
+                <!-- Interactive Chart Panel -->
+                <div class="glass-panel chart-panel">
+                    <div class="panel-header">
+                        <h3>실시간 차트</h3>
+                        <div class="chart-timeframes">
+                            <button class="timeframe-btn active">1일</button>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <div id="stock-chart" style="width: 100%; height: 100%;"></div>
+                        <div id="chart-loading" class="chart-overlay hidden">
+                            <i data-lucide="loader-2" class="spinner"></i>
+                            <span>차트 데이터를 불러오는 중...</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right: Order & Portfolio -->
+            <section class="grid-col-right">
+                <!-- Order Panel -->
+                <div class="glass-panel order-panel">
+                    <div class="panel-header">
+                        <h3>주문하기</h3>
+                    </div>
+                    <div class="order-tabs">
+                        <button class="order-tab active" id="tab-buy">매수</button>
+                        <button class="order-tab" id="tab-sell">매도</button>
+                    </div>
+                    <div class="order-body">
+                        <div class="form-group">
+                            <label>주문 방식</label>
+                            <div class="radio-group">
+                                <label class="radio-label">
+                                    <input type="radio" name="price-type" value="market" checked>
+                                    <span>시장가</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="price-type" value="limit">
+                                    <span>지정가</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-group" id="limit-price-group" style="display:none;">
+                            <label for="order-price">주문 가격</label>
+                            <input type="number" id="order-price" placeholder="가격을 입력하세요" min="1">
+                        </div>
+                        <div class="form-group">
+                            <div class="qty-label-wrap" style="display: flex; justify-content: space-between; align-items: baseline;">
+                                <label for="order-quantity">주문 수량 (주)</label>
+                                <span id="max-order-qty-label" style="font-size: 11px; color: var(--text-secondary);">가능: 0주</span>
+                            </div>
+                            <div class="quantity-input-wrap">
+                                <button type="button" class="qty-btn" id="qty-minus">-</button>
+                                <input type="number" id="order-quantity" value="1" min="1">
+                                <button type="button" class="qty-btn" id="qty-plus">+</button>
+                            </div>
+                        </div>
+                        <div class="order-calc-info">
+                            <div class="calc-row">
+                                <span>주문 총액</span>
+                                <span class="calc-value" id="order-total-price">₩0</span>
+                            </div>
+                            <div class="calc-row exchange-row" id="order-exchange-info" style="display: none; margin-top: 4px; font-size: 11px; border-top: 1px dashed rgba(255,255,255,0.04); padding-top: 4px;">
+                                <span>적용 환율</span>
+                                <span>$0.00 (1$ = 1,400원)</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-buy w-full" id="submit-order-btn">매수 주문</button>
+                    </div>
+                </div>
+
+                <!-- Portfolio (Holdings) -->
+                <div class="glass-panel portfolio-panel">
+                    <div class="panel-header">
+                        <h3>보유 주식</h3>
+                    </div>
+                    <div class="portfolio-list-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>종목</th>
+                                    <th>보유량</th>
+                                    <th>평가금액 (비중)</th>
+                                    <th>평단 / 현재가</th>
+                                    <th>평가손익 (수익률)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="portfolio-tbody">
+                                <tr class="empty-row">
+                                    <td colspan="5">보유 중인 주식이 없습니다.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Bottom Row: History & Leaderboard -->
+        <footer class="bottom-grid">
+            <!-- Transaction History -->
+            <section class="glass-panel history-panel">
+                <div class="panel-header">
+                    <h3>체결 내역</h3>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>시간</th>
+                                <th>종목</th>
+                                <th>구분</th>
+                                <th>체결가</th>
+                                <th>수량</th>
+                                <th>상태</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody">
+                            <tr class="empty-row">
+                                <td colspan="6">체결 내역이 없습니다.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Leaderboard -->
+            <section class="glass-panel leaderboard-panel">
+                <div class="panel-header">
+                    <h3>실시간 랭킹 TOP 10</h3>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>순위</th>
+                                <th>닉네임</th>
+                                <th>총 자산</th>
+                                <th>수익률</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leaderboard-tbody">
+                            <tr class="empty-row">
+                                <td colspan="4">랭킹 데이터를 불러오는 중...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </footer>
+    </div>
+    
+    <!-- Authentication Modal -->
+    <div class="auth-backdrop" id="auth-modal">
+        <div class="auth-card glass-panel">
+            <div class="auth-header">
+                <h2>QuantumTrade</h2>
+                <p>가상 모의 주식 투자 시뮬레이터</p>
+            </div>
+            
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="tab-login-mode">로그인</button>
+                <button class="auth-tab" id="tab-register-mode">회원가입</button>
+            </div>
+            
+            <!-- Login Form -->
+            <form id="login-form" class="auth-form">
+                <div class="form-group">
+                    <label for="login-email">이메일 주소</label>
+                    <input type="email" id="login-email" required placeholder="example@email.com">
+                </div>
+                <div class="form-group">
+                    <label for="login-password">비밀번호</label>
+                    <input type="password" id="login-password" required placeholder="비밀번호 입력">
+                </div>
+                <div class="auth-error" id="login-error"></div>
+                <button type="submit" class="btn btn-buy w-full auth-btn">로그인</button>
+            </form>
+            
+            <!-- Register Form (Hidden by default) -->
+            <form id="register-form" class="auth-form hidden">
+                <div class="form-group">
+                    <label for="register-username">닉네임</label>
+                    <input type="text" id="register-username" required placeholder="사용할 닉네임">
+                </div>
+                <div class="form-group">
+                    <label for="register-email">이메일 주소</label>
+                    <input type="email" id="register-email" required placeholder="example@email.com">
+                </div>
+                <div class="form-group">
+                    <label for="register-password">비밀번호</label>
+                    <input type="password" id="register-password" required placeholder="최소 6자리 비밀번호">
+                </div>
+                <div class="form-group">
+                    <label for="register-password-confirm">비밀번호 확인</label>
+                    <input type="password" id="register-password-confirm" required placeholder="비밀번호 재입력">
+                </div>
+                <div class="auth-error" id="register-error"></div>
+                <button type="submit" class="btn btn-sell w-full auth-btn">회원가입</button>
+            </form>
+
+            <div class="auth-footer-info" id="auth-status-msg">
+                <!-- Status warnings loaded dynamically -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Load standard app.js script (non-module allows local file:/// running) -->
+    <script src="app.js"></script>
+    <script>
+        // Initialize lucide icons
+        lucide.createIcons();
+    </script>
+</body>
+</html>
