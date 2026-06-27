@@ -571,11 +571,39 @@ async function updateRealtimeQuote(symbol) {
         
         
         let updateTime;
-        if (state.currentTimeframe === '1D' || state.currentTimeframe === '1W') {
-            updateTime = Math.floor(Date.now() / 1000);
+        const now = new Date();
+        if (state.currentTimeframe === '1D') {
+            // 1D (1분봉) 차트는 갱신 시 현재 분의 UTC 정각 시작 시간으로 고정하여 차트 꼬임을 방지합니다.
+            const utcNow = new Date(Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                now.getUTCHours(),
+                now.getUTCMinutes(),
+                0, 0
+            ));
+            updateTime = Math.floor(utcNow.getTime() / 1000);
+        } else if (state.currentTimeframe === '1W') {
+            // 1W (15분봉) 차트는 UTC 15분 정각 시간으로 고정합니다.
+            const roundedMin = Math.floor(now.getUTCMinutes() / 15) * 15;
+            const utcNow = new Date(Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                now.getUTCHours(),
+                roundedMin,
+                0, 0
+            ));
+            updateTime = Math.floor(utcNow.getTime() / 1000);
         } else {
-            const dateStr = new Date().toISOString().split('T')[0];
-            updateTime = Math.floor(new Date(dateStr).getTime() / 1000);
+            // 일봉/주봉/월봉 단위일 때는 오늘 UTC 기준 자정 시각으로 고정하여 타임존 왜곡을 원천 배제합니다.
+            const utcToday = new Date(Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                0, 0, 0, 0
+            ));
+            updateTime = Math.floor(utcToday.getTime() / 1000);
         }
         if (areaSeries) {
             areaSeries.update({
@@ -625,7 +653,7 @@ function startRealtimePolling() {
     pollAllActiveStocks();
     pollingTimer = setInterval(() => {
         pollAllActiveStocks();
-    }, 12000);
+    }, 10000);
 }
 
 // ==========================================

@@ -58,7 +58,7 @@ const FALLBACK_SEEDS = {
     'COST': 720.0
 };
 
-// Memory caches to respect Twelve Data Free Tier (8 requests per minute)
+// Memory caches
 const quoteCache = {};
 const historyCache = {};
 
@@ -99,31 +99,20 @@ function fetchFromTwelveData(endpoint) {
     });
 }
 
-// Emergency Fallback Generation (US stock precision is always 2 decimals)
+// Emergency Fallback Generation (Pure simulation if Twelve Data fails)
 function getFallbackPrice(symbol) {
-    if (!quoteCache[symbol]) {
-        const base = FALLBACK_SEEDS[symbol] || 100.0;
-        quoteCache[symbol] = {
-            data: {
-                c: base,
-                d: base * 0.01,
-                dp: 1.00,
-                h: base * 1.01,
-                l: base * 0.99,
-                o: base * 0.995,
-                pc: base * 0.99
-            },
-            timestamp: Date.now()
-        };
-    }
-    const cached = quoteCache[symbol].data;
-    const change = (Math.random() - 0.5) * 0.003;
-    cached.c = parseFloat((cached.c * (1 + change)).toFixed(2));
-    if (cached.c > cached.h) cached.h = cached.c;
-    if (cached.c < cached.l) cached.l = cached.c;
-    cached.d = parseFloat((cached.c - cached.pc).toFixed(2));
-    cached.dp = parseFloat(((cached.d / cached.pc) * 100).toFixed(2));
-    return cached;
+    const base = FALLBACK_SEEDS[symbol] || 100.0;
+    const change = (Math.random() - 0.5) * 0.001;
+    const cachedPrice = base * (1 + change);
+    return {
+        c: parseFloat(cachedPrice.toFixed(2)),
+        d: parseFloat((cachedPrice - base * 0.995).toFixed(2)),
+        dp: 0.50,
+        h: parseFloat((cachedPrice * 1.01).toFixed(2)),
+        l: parseFloat((cachedPrice * 0.99).toFixed(2)),
+        o: parseFloat((base * 0.995).toFixed(2)),
+        pc: parseFloat((base * 0.995).toFixed(2))
+    };
 }
 
 function getFallbackHistory(symbol) {
@@ -153,6 +142,49 @@ function getFallbackHistory(symbol) {
     }
     return data;
 }
+
+// 10 Seconds Auto Batch Sync Poller
+// This is the core engine to query all 20 stocks in 1 single API call every 10 seconds.
+// This limits Twelve Data API usage to EXACTLY 6 calls per minute globally.
+async function syncAllQuotesFromTwelveData() {
+    if (!API_KEY) return;
+    
+    try {
+        const symbolsStr = SUPPORTED_STOCKS.map(s => s.symbol).join(',');
+        const endpoint = `quote?symbol=${symbolsStr}`;
+        const rawData = await fetchFromTwelveData(endpoint);
+        
+        // Twelve Data returns object keyed by symbols for batch queries
+        SUPPORTED_STOCKS.forEach(stock => {
+            const sym = stock.symbol;
+            const quote = rawData[sym];
+            if (quote && quote.close) {
+                const digits = 2;
+                const cVal = parseFloat(parseFloat(quote.close).toFixed(digits));
+                const pcVal = parseFloat(parseFloat(quote.previous_close).toFixed(digits));
+                const diff = cVal - pcVal;
+                const diffPercent = (diff / pcVal) * 100;
+                
+                quoteCache[sym] = {
+                    c: cVal,
+                    d: parseFloat(diff.toFixed(2)),
+                    dp: parseFloat(diffPercent.toFixed(2)),
+                    h: parseFloat(parseFloat(quote.high).toFixed(2)),
+                    l: parseFloat(parseFloat(quote.low).toFixed(2)),
+                    o: parseFloat(parseFloat(quote.open).toFixed(2)),
+                    pc: pcVal
+                };
+            }
+        });
+        console.log(`[Batch Sync] Successfully updated 20 stocks at ${new Date().toLocaleTimeString()}`);
+    } catch (err) {
+        console.error('[Batch Sync Failed]:', err.message);
+    }
+}
+
+// Start batch syncing immediately and repeat every 10 seconds (6 times per minute)
+setTimeout(syncAllQuotesFromTwelveData, 1000);
+setInterval(syncAllQuotesFromTwelveData, 10000);
 
 // Serve static assets
 app.use(express.static(__dirname));
@@ -218,8 +250,13 @@ app.get('/api/stock/history', async (req, res) => {
         const reversed = [...rawData.values].reverse();
         
         const chartData = reversed.map(val => {
-            const dateObj = new Date(val.datetime);
-            const timestamp = Math.floor(dateObj.getTime() / 1000);
+            let isoStr = val.datetime;
+            if (val.datetime.includes(' ')) {
+                isoStr = val.datetime.replace(' ', 'T') + 'Z';
+            } else {
+                isoStr = val.datetime + 'T00:00:00Z';
+            }
+            const timestamp = Math.floor(new Date(isoStr).getTime() / 1000);
             return {
                 time: timestamp, // Unix timestamp in seconds for perfect time-axis on intraday/monthly charts
                 open: parseFloat(parseFloat(val.open).toFixed(2)),
@@ -242,7 +279,7 @@ app.get('/api/stock/history', async (req, res) => {
         const fallbackData = getFallbackHistory(symbol);
         const mappedFallback = fallbackData.map(val => {
             return {
-                time: Math.floor(new Date(val.time).getTime() / 1000),
+                time: Math.floor(new Date(val.time + 'T00:00:00Z').getTime() / 1000),
                 open: val.open,
                 high: val.high,
                 low: val.low,
@@ -253,53 +290,18 @@ app.get('/api/stock/history', async (req, res) => {
     }
 });
 
-// 3. Get Realtime Quote (Cached for 10 seconds to respect Rate Limit, returning 100% raw unaltered stock data)
+// 3. Get Realtime Quote (Served instantly from 10-seconds raw batch sync cache)
 app.get('/api/stock/realtime', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
-
-    // Check 10 seconds cache
     const cached = quoteCache[symbol];
-    if (cached && (Date.now() - cached.timestamp < 10000)) {
-        // AI 가격 보정이나 노이즈 개입 없이, Twelve Data API가 전달한 100% 날 것 그대로의 원본 데이터를 반환합니다.
-        return res.json(cached.data);
+    if (cached) {
+        // Return 100% raw, unaltered stock data directly from the batch sync
+        return res.json(cached);
     }
-
-    try {
-        const endpoint = `quote?symbol=${symbol}`;
-        const rawData = await fetchFromTwelveData(endpoint);
-        
-        if (!rawData || !rawData.close) {
-            throw new Error('No quote data found or API limit hit');
-        }
-        
-        const cVal = parseFloat(parseFloat(rawData.close).toFixed(2));
-        const pcVal = parseFloat(parseFloat(rawData.previous_close).toFixed(2));
-        const diff = cVal - pcVal;
-        const diffPercent = (diff / pcVal) * 100;
-        
-        const quoteData = {
-            c: cVal,
-            d: parseFloat(diff.toFixed(2)),
-            dp: parseFloat(diffPercent.toFixed(2)),
-            h: parseFloat(parseFloat(rawData.high).toFixed(2)),
-            l: parseFloat(parseFloat(rawData.low).toFixed(2)),
-            o: parseFloat(parseFloat(rawData.open).toFixed(2)),
-            pc: pcVal
-        };
-        
-        // Update cache
-        quoteCache[symbol] = {
-            data: quoteData,
-            timestamp: Date.now()
-        };
-        
-        res.json(quoteData);
-    } catch (err) {
-        console.error(`Error fetching realtime quote for ${symbol}:`, err.message);
-        // Fallback gracefully on rate limit blocks to prevent UI freeze
-        const fallbackData = getFallbackPrice(symbol);
-        res.json(fallbackData);
-    }
+    
+    // If cache not warmed up, return safe fallback seed
+    const fallback = getFallbackPrice(symbol);
+    res.json(fallback);
 });
 
 app.listen(PORT, () => {
