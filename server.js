@@ -198,15 +198,20 @@ app.get('/api/stocks', (req, res) => {
     res.json(SUPPORTED_STOCKS);
 });
 
-// 2. Get Historical Candlestick Data (Cached for 5 minutes, 100% unaltered real data only)
+// 2. Get Historical Candlestick Data (Cached for 12 hours/1 hour, 100% unaltered real data only)
 app.get('/api/stock/history', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
     const timeframe = req.query.timeframe || '3M';
     const cacheKey = `${symbol}_${timeframe}`;
     
-    // Check 5 minutes cache
+    // Intraday (1D, 1W) is cached for 1 hour (3600000 ms)
+    // Daily/Weekly/Monthly (1M, 3M, 1Y, 5Y, 10Y) is cached for 12 hours (43200000 ms)
+    const isIntraday = timeframe === '1D' || timeframe === '1W';
+    const cacheTTL = isIntraday ? 3600000 : 43200000;
+    
+    // Check cache
     const cached = historyCache[cacheKey];
-    if (cached && (Date.now() - cached.timestamp < 300000)) {
+    if (cached && (Date.now() - cached.timestamp < cacheTTL)) {
         return res.json(cached.data);
     }
 

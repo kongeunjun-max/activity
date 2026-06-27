@@ -977,18 +977,25 @@ function updateUI() {
                 const formatHoldVal = (v) => v.toLocaleString(undefined, { minimumFractionDigits: holdDigits, maximumFractionDigits: holdDigits });
                 
                 const tr = document.createElement('tr');
+                const evalPriceKRW = evalPrice * rate;
+                const avgPriceKRW = hold.avgPrice * rate;
+                const currentPriceKRW = currentPrice * rate;
+                const profitKRW = profit * rate;
+                
                 tr.innerHTML = `
                     <td><strong>${holdSym}</strong></td>
                     <td>${hold.quantity} 주</td>
                     <td>
                         ${holdCurrency}${formatHoldVal(evalPrice)} 
-                        <span style="font-size:11px; color:var(--text-secondary); margin-left:4px;">(${weight.toFixed(1)}%)</span>
+                        <span style="font-size:11px; color:var(--text-secondary); display:block; margin-top:2px;">₩${Math.round(evalPriceKRW).toLocaleString()} (${weight.toFixed(1)}%)</span>
                     </td>
                     <td style="font-family: 'Outfit'; font-size:12px;">
                         ${holdCurrency}${formatHoldVal(hold.avgPrice)} / <span style="color:#fff;">${holdCurrency}${formatHoldVal(currentPrice)}</span>
+                        <span style="font-size:11px; color:var(--text-secondary); display:block; margin-top:2px;">₩${Math.round(avgPriceKRW).toLocaleString()} / ₩${Math.round(currentPriceKRW).toLocaleString()}</span>
                     </td>
                     <td class="${isProfitUp ? 'positive' : 'negative'}">
                         ${holdCurrency}${formatHoldVal(profit)} (${isProfitUp ? '+' : ''}${indivRate.toFixed(2)}%)
+                        <span style="font-size:11px; display:block; margin-top:2px;">₩${Math.round(profitKRW).toLocaleString()}</span>
                     </td>
                 `;
                 portfolioTbody.appendChild(tr);
