@@ -184,15 +184,30 @@ app.get('/api/stocks', (req, res) => {
 // 2. Get Historical Candlestick Data (Cached for 5 minutes)
 app.get('/api/stock/history', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
+    const timeframe = req.query.timeframe || '3M';
+    const cacheKey = `${symbol}_${timeframe}`;
     
     // Check 5 minutes cache
-    const cached = historyCache[symbol];
+    const cached = historyCache[cacheKey];
     if (cached && (Date.now() - cached.timestamp < 300000)) {
         return res.json(cached.data);
     }
 
+    // Timeframe configurations for Twelve Data API
+    const configMap = {
+        '1D': { interval: '1min', outputsize: 80 },
+        '1W': { interval: '15min', outputsize: 130 },
+        '1M': { interval: '1day', outputsize: 30 },
+        '3M': { interval: '1day', outputsize: 90 },
+        '1Y': { interval: '1week', outputsize: 52 },
+        '5Y': { interval: '1month', outputsize: 60 },
+        '10Y': { interval: '1month', outputsize: 120 }
+    };
+    
+    const config = configMap[timeframe] || configMap['3M'];
+
     try {
-        const endpoint = `time_series?symbol=${symbol}&interval=1day&outputsize=90`;
+        const endpoint = `time_series?symbol=${symbol}&interval=${config.interval}&outputsize=${config.outputsize}`;
         const rawData = await fetchFromTwelveData(endpoint);
         
         if (!rawData.values || rawData.values.length === 0) {
@@ -203,8 +218,10 @@ app.get('/api/stock/history', async (req, res) => {
         const reversed = [...rawData.values].reverse();
         
         const chartData = reversed.map(val => {
+            const dateObj = new Date(val.datetime);
+            const timestamp = Math.floor(dateObj.getTime() / 1000);
             return {
-                time: val.datetime.split(' ')[0], // YYYY-MM-DD
+                time: timestamp, // Unix timestamp in seconds for perfect time-axis on intraday/monthly charts
                 open: parseFloat(parseFloat(val.open).toFixed(2)),
                 high: parseFloat(parseFloat(val.high).toFixed(2)),
                 low: parseFloat(parseFloat(val.low).toFixed(2)),
@@ -213,17 +230,26 @@ app.get('/api/stock/history', async (req, res) => {
         });
         
         // Update cache
-        historyCache[symbol] = {
+        historyCache[cacheKey] = {
             data: chartData,
             timestamp: Date.now()
         };
         
         res.json(chartData);
     } catch (err) {
-        console.error(`Error fetching history for ${symbol}:`, err.message);
-        // Under extreme rate limits, fallback gracefully to seeds to keep UI rendering
+        console.error(`Error fetching history for ${symbol} with timeframe ${timeframe}:`, err.message);
+        // Under extreme rate limits, fallback gracefully to keep UI rendering
         const fallbackData = getFallbackHistory(symbol);
-        res.json(fallbackData);
+        const mappedFallback = fallbackData.map(val => {
+            return {
+                time: Math.floor(new Date(val.time).getTime() / 1000),
+                open: val.open,
+                high: val.high,
+                low: val.low,
+                close: val.close
+            };
+        });
+        res.json(mappedFallback);
     }
 });
 

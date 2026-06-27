@@ -5,6 +5,7 @@ const state = {
     pendingOrders: [],     // Active Limit Orders [{ id, symbol, type: 'buy'|'sell', price, qty, time }]
     history: [],           // Filled / Cancelled Transaction History list
     currentStock: 'AAPL',
+    currentTimeframe: '3M',// Selected Chart Timeframe (1D, 1W, 1M, 3M, 1Y, 5Y, 10Y)
     orderType: 'buy',      // 'buy' or 'sell'
     stocks: {}             // Stock details metadata
 };
@@ -473,7 +474,8 @@ async function fetchStockList() {
     }
 }
 
-async function loadChartHistory(symbol) {
+async function loadChartHistory(symbol, timeframe) {
+    const tf = timeframe || state.currentTimeframe || '3M';
     // 종목에 맞는 원화/달러화 포맷과 색상 곡선 반영을 위해 진입 시 차트를 새로 빌드
     initTradingViewChart();
     
@@ -483,7 +485,7 @@ async function loadChartHistory(symbol) {
     if (loadingOverlay) loadingOverlay.classList.remove('hidden');
     
     try {
-        const response = await fetch(`/api/stock/history?symbol=${symbol}`);
+        const response = await fetch(`/api/stock/history?symbol=${symbol}&timeframe=${tf}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         
         const historyData = await response.json();
@@ -502,7 +504,7 @@ async function loadChartHistory(symbol) {
             }
         }
     } catch (err) {
-        console.error(`Failed to load history for ${symbol}:`, err);
+        console.error(`Failed to load history for ${symbol} (${tf}):`, err);
     } finally {
         if (loadingOverlay) loadingOverlay.classList.add('hidden');
     }
@@ -525,10 +527,17 @@ async function updateRealtimeQuote(symbol) {
         stock.low = data.l;
         stock.volume = data.v || 500000;
         
-        const todayStr = new Date().toISOString().split('T')[0];
+        
+        let updateTime;
+        if (state.currentTimeframe === '1D' || state.currentTimeframe === '1W') {
+            updateTime = Math.floor(Date.now() / 1000);
+        } else {
+            const dateStr = new Date().toISOString().split('T')[0];
+            updateTime = Math.floor(new Date(dateStr).getTime() / 1000);
+        }
         if (areaSeries) {
             areaSeries.update({
-                time: todayStr,
+                time: updateTime,
                 value: data.c
             });
         }
@@ -1132,7 +1141,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // 🚀 [핵심 수정 부분] 로그인을 안 한 상태여도 차트와 실시간 주가를 무조건 띄우도록 강제 실행!
         if (state.currentStock) {
-            await loadChartHistory(state.currentStock); // 차트 즉시 그리기
+            await loadChartHistory(state.currentStock, state.currentTimeframe); // 차트 즉시 그리기
             startRealtimePolling(); // 실시간 가격 4초마다 갱신 시작
         }
     } catch (err) {
@@ -1160,7 +1169,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const activePriceRadio = document.querySelector('input[name="price-type"]:checked');
             const isLimit = activePriceRadio ? activePriceRadio.value === 'limit' : false;
             
-            await loadChartHistory(state.currentStock);
+            await loadChartHistory(state.currentStock, state.currentTimeframe);
             await updateRealtimeQuote(state.currentStock);
             
             if (isLimit) {
@@ -1174,6 +1183,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             startRealtimePolling();
         });
     }
+    
+    // 4-1. 차트 타임프레임 버튼 리스너 바인딩
+    const tfButtons = document.querySelectorAll('.timeframe-btn');
+    tfButtons.forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            const selectedTf = e.target.getAttribute('data-timeframe');
+            if (!selectedTf) return;
+            
+            tfButtons.forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            
+            state.currentTimeframe = selectedTf;
+            await loadChartHistory(state.currentStock, state.currentTimeframe);
+        });
+    });
     
     const qtyPlusBtn = document.getElementById('qty-plus');
     if (qtyPlusBtn) qtyPlusBtn.addEventListener('click', () => adjustQty(1));
