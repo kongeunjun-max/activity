@@ -253,13 +253,14 @@ app.get('/api/stock/history', async (req, res) => {
     }
 });
 
-// 3. Get Realtime Quote (Cached for 15 seconds to respect Rate Limit)
+// 3. Get Realtime Quote (Cached for 10 seconds to respect Rate Limit, returning 100% raw unaltered stock data)
 app.get('/api/stock/realtime', async (req, res) => {
     const symbol = req.query.symbol || 'AAPL';
 
-    // Check 15 seconds cache
+    // Check 10 seconds cache
     const cached = quoteCache[symbol];
-    if (cached && (Date.now() - cached.timestamp < 15000)) {
+    if (cached && (Date.now() - cached.timestamp < 10000)) {
+        // AI 가격 보정이나 노이즈 개입 없이, Twelve Data API가 전달한 100% 날 것 그대로의 원본 데이터를 반환합니다.
         return res.json(cached.data);
     }
 

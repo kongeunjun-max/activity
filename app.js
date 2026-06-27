@@ -434,6 +434,48 @@ function initTradingViewChart() {
         }
     });
 
+    chart.subscribeCrosshairMove((param) => {
+        const priceEl = document.getElementById('current-stock-price');
+        const changeEl = document.getElementById('current-stock-change');
+        const symbol = state.currentStock;
+        const stock = state.stocks[symbol];
+        if (!stock || !priceEl || !changeEl) return;
+        
+        const isKRW = symbol.endsWith('.KS');
+        const currencySymbol = isKRW ? '₩' : '$';
+        const decimalDigits = isKRW ? 0 : 2;
+        const formatValue = (val) => val.toLocaleString(undefined, { minimumFractionDigits: decimalDigits, maximumFractionDigits: decimalDigits });
+        
+        if (param.time && param.seriesPrices.size > 0) {
+            const seriesData = param.seriesPrices.get(areaSeries);
+            if (seriesData !== undefined) {
+                const hoveredPrice = seriesData;
+                priceEl.innerText = `${currencySymbol}${formatValue(hoveredPrice)}`;
+                
+                let dateStr = "";
+                if (typeof param.time === 'number') {
+                    const dateObj = new Date(param.time * 1000);
+                    dateStr = dateObj.toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' });
+                    if (state.currentTimeframe === '1D' || state.currentTimeframe === '1W') {
+                        dateStr += " " + dateObj.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+                    }
+                } else {
+                    dateStr = param.time;
+                }
+                changeEl.innerText = `${dateStr} 기준 주가`;
+                changeEl.className = 'price-change neutral';
+            }
+        } else {
+            const isUp = stock.price >= stock.prevClose;
+            const diff = stock.price - stock.prevClose;
+            const diffPercent = (diff / stock.prevClose) * 100;
+            
+            priceEl.innerText = `${currencySymbol}${formatValue(stock.price)}`;
+            changeEl.innerText = `${isUp ? '+' : ''}${currencySymbol}${formatValue(diff)} (${isUp ? '+' : ''}${diffPercent.toFixed(2)}%)`;
+            changeEl.className = `price-change ${isUp ? 'positive' : 'negative'}`;
+        }
+    });
+
     const resizeObserver = new ResizeObserver(entries => {
         if (entries.length === 0 || !entries[0].contentRect || !chart) return;
         const { width, height } = entries[0].contentRect;
@@ -565,12 +607,25 @@ async function updateRealtimeQuote(symbol) {
     }
 }
 
+async function pollAllActiveStocks() {
+    if (!state.currentStock) return;
+    
+    // 1. Update the current selected stock price
+    await updateRealtimeQuote(state.currentStock);
+    
+    // 2. Update all held stocks in the background for live profit/loss calculations
+    const heldSymbols = Object.keys(state.holdings).filter(sym => state.holdings[sym].quantity > 0 && sym !== state.currentStock);
+    for (const sym of heldSymbols) {
+        await updateRealtimeQuote(sym);
+    }
+}
+
 function startRealtimePolling() {
     if (pollingTimer) clearInterval(pollingTimer);
-    updateRealtimeQuote(state.currentStock);
+    pollAllActiveStocks();
     pollingTimer = setInterval(() => {
-        updateRealtimeQuote(state.currentStock);
-    }, 4000);
+        pollAllActiveStocks();
+    }, 12000);
 }
 
 // ==========================================
