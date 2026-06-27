@@ -34,7 +34,7 @@ const SUPPORTED_STOCKS = [
     { symbol: 'COST', name: 'Costco' }
 ];
 
-// High-fidelity static price references for emergency rate limit bypass (no random noise allowed)
+// High-fidelity static price references for emergency rate limit bypass
 const FALLBACK_SEEDS = {
     'MSFT': 390.0,
     'AAPL': 210.0,
@@ -61,6 +61,46 @@ const FALLBACK_SEEDS = {
 // Memory caches
 const quoteCache = {};
 const historyCache = {};
+
+// Concurrency Queue for Twelve Data API (Minimum 8.2 seconds delay between outbound calls)
+const apiQueue = [];
+let isProcessingQueue = false;
+let lastApiCallTime = 0;
+
+function queueFetchFromTwelveData(endpoint) {
+    return new Promise((resolve, reject) => {
+        apiQueue.push({ endpoint, resolve, reject });
+        processApiQueue();
+    });
+}
+
+async function processApiQueue() {
+    if (isProcessingQueue || apiQueue.length === 0) return;
+    isProcessingQueue = true;
+    
+    while (apiQueue.length > 0) {
+        const now = Date.now();
+        const timeSinceLastCall = now - lastApiCallTime;
+        const minInterval = 8200; // 8.2 seconds safe interval for 8 calls/min limit
+        
+        if (timeSinceLastCall < minInterval) {
+            const delay = minInterval - timeSinceLastCall;
+            await new Promise(r => setTimeout(r, delay));
+        }
+        
+        const currentReq = apiQueue.shift();
+        lastApiCallTime = Date.now();
+        
+        try {
+            const result = await fetchFromTwelveData(currentReq.endpoint);
+            currentReq.resolve(result);
+        } catch (err) {
+            currentReq.reject(err);
+        }
+    }
+    
+    isProcessingQueue = false;
+}
 
 // HTTPS Request Helper for Twelve Data
 function fetchFromTwelveData(endpoint) {
@@ -187,7 +227,7 @@ app.get('/api/stock/history', async (req, res) => {
 
     try {
         const endpoint = `time_series?symbol=${symbol}&interval=${config.interval}&outputsize=${config.outputsize}`;
-        const rawData = await fetchFromTwelveData(endpoint);
+        const rawData = await queueFetchFromTwelveData(endpoint);
         
         if (!rawData.values || rawData.values.length === 0) {
             throw new Error('No historical data found or API limit hit');
@@ -249,7 +289,7 @@ app.get('/api/stock/realtime', async (req, res) => {
 
     try {
         const endpoint = `quote?symbol=${symbol}`;
-        const rawData = await fetchFromTwelveData(endpoint);
+        const rawData = await queueFetchFromTwelveData(endpoint);
         
         if (!rawData || !rawData.close) {
             throw new Error('No quote data found from Twelve Data');
@@ -279,7 +319,7 @@ app.get('/api/stock/realtime', async (req, res) => {
         res.json(quoteData);
     } catch (err) {
         console.error(`Error fetching realtime quote for ${symbol}:`, err.message);
-        // Serve static reference price with 0.00% daily change on rate limit block
+        // Serve static reference price with 0.00% daily change on rate limit block (keeps UI healthy)
         const base = FALLBACK_SEEDS[symbol] || 100.0;
         const staticQuote = {
             c: base,

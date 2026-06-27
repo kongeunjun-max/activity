@@ -641,9 +641,10 @@ async function pollAllActiveStocks() {
     // 1. Update the current selected stock price (Every 2 minutes -> 120000ms)
     await updateRealtimeQuote(state.currentStock);
     
-    // 2. Update all held stocks in the background once every 2 minutes (120000ms) to save Twelve Data API credits
+    // 2. Update all held stocks sequentially in the background with a 1.5-second time delay to ease backend queue pressure
     const heldSymbols = Object.keys(state.holdings).filter(sym => state.holdings[sym].quantity > 0 && sym !== state.currentStock);
     for (const sym of heldSymbols) {
+        await new Promise(resolve => setTimeout(resolve, 1500)); // 1.5s client-side delay
         await updateRealtimeQuote(sym);
     }
 }
